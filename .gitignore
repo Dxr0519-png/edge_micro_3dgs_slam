@@ -1,0 +1,189 @@
+# ==========================================================
+# Edge-3DGS-SLAM · .gitignore
+# 原则：
+#   1. 密钥/凭据文件一律禁止提交（第 1 节，最重要）
+#   2. 大文件（模型权重 / 数据 / 构建产物）不入库
+#   3. 保持宽松匹配，避免误伤源码（docs/ config/ scripts/ docker/ 均入库）
+# ==========================================================
+
+
+# ===== 1. 密钥与凭据（API 泄漏防护，禁止提交）=====
+# 环境变量文件（常见的 HF_TOKEN / NGC API Key / 数据库口令都放这里）
+.env
+.env.*
+!.env.example
+.env.local
+
+# 私有密钥 / 证书
+*.pem
+*.key
+*.p12
+*.pfx
+*.ppk
+*.secret
+.secret/
+
+# 通用令牌 / 凭据文件名
+.netrc
+*_token*
+*_key*
+*_secret*
+*credential*
+*password*
+token.txt
+keys.txt
+secrets.txt
+
+# 具体工具凭据
+.huggingface/
+huggingface/token
+*.huggingface_token
+# NGC 容器仓库登录凭据（若以文件形式存在）
+.docker/config.json
+*.dockerconfigjson
+
+# 本地配置覆盖（可能含连接串 / 内网地址 / 口令）
+*.local.yaml
+*.local.yml
+*.local.json
+config/**/*.local.*
+config/**/.env*
+
+
+# ===== 2. Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+.eggs/
+build/
+dist/
+*.egg
+.venv/
+venv/
+env/
+*.whl
+.python-version
+.pip-wheel-metadata/
+
+
+# ===== 3. 测试 / Lint / 静态分析缓存 =====
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.coverage
+.coverage.*
+htmlcov/
+.hypothesis/
+.tox/
+.nox/
+.ipynb_checkpoints/
+.jupyter/
+
+
+# ===== 4. 模型权重与中间产物（大文件，不入库）=====
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+*.onnx
+*.engine
+*.trt
+*.plan
+*.npz
+*.joblib
+*.pkl
+
+
+# ===== 5. 数据（数据集 / 采集 / 结果）=====
+data/raw/**
+data/checkpoints/**
+data/outputs/**
+data/**/*.ply
+data/**/*.pkl
+data/**/*.pt
+data/**/*.pth
+data/**/*.bag
+data/**/*.db
+data/**/*.db3
+data/**/*.mcap
+data/**/*.npy
+data/**/*.npz
+data/**/*.onnx
+data/**/*.engine
+data/**/*.png
+data/**/*.jpg
+data/**/*.jpeg
+data/**/*.zip
+data/**/*.tar
+data/**/*.gz
+!data/raw/.gitkeep
+!data/checkpoints/.gitkeep
+!data/outputs/.gitkeep
+
+
+# ===== 6. ROS2 / colcon 构建产物 =====
+ws_src/build/
+ws_src/install/
+ws_src/log/
+ws_src/**/build/
+ws_src/**/install/
+ws_src/**/log/
+**/local_setup.bash
+**/local_setup.sh
+**/local_setup.zsh
+**/_local_setup_util.py
+
+
+# ===== 7. 第三方依赖（按文档 clone，不入库）=====
+third_party/*
+!third_party/.gitkeep
+
+
+# ===== 8. 构建系统 / CUDA 扩展编译产物 =====
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+*.o
+*.a
+*.la
+*.lo
+*.mod
+*.cu.o
+setup.cfg.bak
+*.egg
+
+
+# ===== 9. 日志 =====
+*.log
+*.log.*
+nohup.out
+
+
+# ===== 10. 编辑器 / IDE / 远程开发 =====
+.idea/
+.vscode/
+.vscode-server/
+.vscode-server-insiders/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+.spotlight-1000-index.working_folder
+
+
+# ===== 11. 实验产物 =====
+experiments/**/*.png
+experiments/**/*.mp4
+experiments/**/*.avi
+experiments/**/*.csv
+experiments/**/*.txt
+experiments/**/*.npy
+experiments/**/*.npz
+experiments/**/*.json
+!experiments/.gitkeep

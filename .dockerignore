@@ -1,0 +1,48 @@
+# Docker 构建上下文忽略（BuildKit）
+# 注意：Dockerfile 的 COPY 会带上上下文里所有文件，
+#       密钥/凭据一旦进镜像层就难以清除，务必在此排除。
+
+# VCS / IDE / 远程开发
+.git
+.gitignore
+.idea
+.vscode
+.vscode-server
+
+# 密钥与凭据
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+.netrc
+*_token*
+*credential*
+.docker/config.json
+
+# 大数据目录（不入镜像）
+data
+experiments
+third_party
+
+# 模型权重与中间产物
+**/*.pt
+**/*.pth
+**/*.onnx
+**/*.engine
+**/*.trt
+**/*.pkl
+**/*.bag
+**/*.db3
+
+# ROS2 构建产物
+ws_src/build
+ws_src/install
+ws_src/log
+
+# Python 缓存
+**/__pycache__
+**/*.pyc
+.venv
+venv

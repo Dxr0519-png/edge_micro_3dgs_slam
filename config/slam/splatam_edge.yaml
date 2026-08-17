@@ -1,0 +1,33 @@
+# 边缘端 RGB-D 3DGS-SLAM（SplaTAM 蓝本）超参占位
+# 各字段在 Phase 2/3 实测后回填/调优
+
+slam:
+  tracking:
+    iters: 8                  # 位姿优化迭代步数
+    lr: 1.0e-2                # se(3) 扰动学习率
+    lambda_rgb: 0.8
+    lambda_ssim: 0.2
+    lambda_depth: 1.0
+
+  mapping:
+    iters: 50                 # 建图优化迭代步数
+    lambda_iso: 0.01          # 各向同性正则权重
+    keyframe:
+      trans_thresh: 0.1       # 关键帧平移阈值 (m)
+      rot_thresh_deg: 3.0     # 关键帧旋转阈值 (°)
+      window_size: 6          # 滑动窗口关键帧数
+
+  gaussian:
+    max_num: 200000           # 硬上限（防 OOM / 控算力）
+    init_opacity: 0.5
+    prune:
+      opacity_thresh: 0.005
+      scale_thresh: 100.0
+
+  render:
+    max_sh_degree: 0          # 边缘端不用 SH
+    downscale_tracking: 2     # Tracking 降采样因子
+
+  precision:
+    fp16_storage: true        # scale/opacity/color 用 FP16 存储
+    xyz_fp32: true            # xyz 保留 FP32

@@ -1,0 +1,25 @@
+# D435i 相机配置（Phase 1 实测后回填内参）
+camera:
+  model: "D435i"
+  # 分辨率（与 rs_launch.py 对齐）
+  width: 640
+  height: 480
+  fps: 30
+
+  # 颜色内参 K（rectified 后，从 /camera/color/camera_info 读取，此处为占位）
+  fx: 0.0
+  fy: 0.0
+  cx: 0.0
+  cy: 0.0
+  distortion_model: "plumb_bob"   # rectified 输出 D≈0
+
+  # 深度
+  depth_scale: 0.001              # 16UC1 mm -> 米
+
+  # 对齐（realsense 内部 align_depth）
+  align_depth: true
+  aligned_depth_topic: "/camera/aligned_depth_to_color/image_raw"
+
+  # IMU（BMI055，为未来 VIO 预留）
+  imu_topic: "/imu"
+  imu_rate_hz: 400

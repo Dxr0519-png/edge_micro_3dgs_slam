@@ -1,0 +1,40 @@
+# 使用:  docker compose build && docker compose up -d
+# 前置:  宿主机（Jetson）已安装 nvidia-container-toolkit + Docker
+#         sudo apt install -y nvidia-container-toolkit && sudo systemctl restart docker
+services:
+  edge_3dgs_slam:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: edge_3dgs_slam:humble
+    container_name: edge_3dgs_slam
+    runtime: nvidia                # Jetson 上用 nvidia 运行时（挂载宿主 CUDA 工具链/GPU）
+    privileged: true               # 访问 USB 相机 / IMU 设备所需
+    network_mode: host             # ROS2 DDS 与 rviz 通信
+    environment:
+      - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+      - ROS_DOMAIN_ID=0
+      - TORCH_CUDA_ARCH_LIST=8.7
+    volumes:
+      # 项目源码挂载到容器（与宿主机共享）
+      - ../:/workspace
+      # X11（rviz2 可视化；无显示器可去掉）
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XAUTHORITY:-$HOME/.Xauthority}:/root/.Xauthority:rw
+      # realsense2_camera 已编译产物挂载（若按 Dockerfile 第 4 步构建则此处可选）
+      # - /ros2_ws/install:/ros2_ws/install
+    devices:
+      # RealSense D435i（VID 8086，PID 见 lsusb；直接透传整个 USB 总线）
+      - /dev/bus/usb:/dev/bus/usb
+    stdin_open: true
+    tty: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

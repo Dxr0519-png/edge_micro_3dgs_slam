@@ -1,0 +1,28 @@
+# 边缘端开放词汇特征工厂（Phase 5）配置占位
+
+feature:
+  sam:
+    name: "MobileSAM"            # 或 FastSAM
+    checkpoint: "data/checkpoints/mobile_sam.pt"
+    points_per_side: 16
+    pred_iou_thresh: 0.86
+    hierarchical:                # 分层掩码（LangSplat 思想）
+      coarse_points_per_side: 8
+      fine_points_per_side: 32
+
+  clip:
+    name: "MobileCLIP-S0"        # 或 S1 / TinyCLIP
+    pretrained: "datacomp_xl_s13b_b90k"
+    dim: 512                     # 输出维度
+    input_size: 224
+
+  autoencoder:
+    latent_dim: 3                # 512 -> D 降维（可配 16）
+    hidden: [256, 64, 16]
+    lr: 1.0e-3
+    lambda_cos: 0.5
+    checkpoint: "data/checkpoints/lang_ae.pt"
+
+  cache:
+    format: "mask_level"         # 掩码级（非逐像素，省显存）
+    path: "data/outputs/feature_map.pkl"

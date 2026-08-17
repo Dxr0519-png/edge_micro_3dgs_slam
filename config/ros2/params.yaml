@@ -1,0 +1,25 @@
+# ROS2 节点参数（Phase 4/6）占位
+
+edge_3dgs_slam_node:
+  ros__parameters:
+    # 订阅话题
+    rgb_topic: "/camera/color/image_raw"
+    depth_topic: "/camera/aligned_depth_to_color/image_raw"
+    color_info_topic: "/camera/color/camera_info"
+    depth_info_topic: "/camera/aligned_depth_to_color/camera_info"
+    imu_topic: "/imu"
+
+    # 发布话题
+    pose_tf_frame: "map"
+    publish_odom: true
+    publish_gaussian_map: true
+    publish_rendered_image: false
+
+    # 同步
+    sync_queue_size: 10
+    sync_slop_sec: 0.05
+
+    # 查询（Phase 6）
+    query_service: "/semantic_query/query"
+    default_top_k: 100
+    default_min_score: 0.3
