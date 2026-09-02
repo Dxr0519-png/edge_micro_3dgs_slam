@@ -17,8 +17,13 @@ set(msg_files
   "msg/SemanticPoint.msg"
 )
 
+set(srv_files
+  "srv/Query.srv"
+)
+
 rosidl_generate_interfaces(${PROJECT_NAME}
   ${msg_files}
+  ${srv_files}
   DEPENDENCIES std_msgs
 )
 

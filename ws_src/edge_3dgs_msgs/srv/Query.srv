@@ -1,0 +1,4 @@
+# 自然语言三维查询服务（Phase 6 §5）：文本 → 3D BBox / 置信度 / 相关点
+QueryRequest request
+---
+QueryResult result

@@ -22,4 +22,7 @@ edge_3dgs_slam_node:
     # 查询（Phase 6）
     query_service: "/semantic_query/query"
     default_top_k: 100
-    default_min_score: 0.3
+    # S0 余弦压缩区间（docs/05 坑 5）：0.3 的 min_score 会过滤全部点（实测坑），
+    # 默认 0.0（top-k 本身已按分数排序）；调用方可显式传 min_score
+    default_min_score: 0.0
+    default_eps: 0.15

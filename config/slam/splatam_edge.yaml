@@ -11,7 +11,8 @@ slam:
 
   mapping:
     iters: 50                 # 建图优化迭代步数
-    lambda_iso: 0.01          # 各向同性正则权重
+    lambda_iso: 0.001         # 各向同性正则权重（Phase 2 §10.9 实测：0.01 强制远近尺度统一
+                              # → 远处覆盖稀疏、depth 系统性偏浅；0.001 保留约束意图）
     keyframe:
       trans_thresh: 0.1       # 关键帧平移阈值 (m)
       rot_thresh_deg: 3.0     # 关键帧旋转阈值 (°)

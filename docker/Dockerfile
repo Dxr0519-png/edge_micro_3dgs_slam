@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.4
 # =====================================================================
 # Edge-3DGS-SLAM 边缘开发容器（aarch64 / L4T）
 #   Jetson Orin NX Super（16GB，JetPack 6.2 / L4T R36.4，Ubuntu 22.04）

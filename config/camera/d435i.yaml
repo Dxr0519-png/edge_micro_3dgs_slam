@@ -6,12 +6,12 @@ camera:
   height: 480
   fps: 30
 
-  # 颜色内参 K（rectified 后，从 /camera/color/camera_info 读取，此处为占位）
-  fx: 0.0
-  fy: 0.0
-  cx: 0.0
-  cy: 0.0
-  distortion_model: "plumb_bob"   # rectified 输出 D≈0
+  # 颜色内参 K（rectified 后，从 /camera/color/camera_info 实测，2026-08-26）
+  fx: 607.6136474609375
+  fy: 607.7603759765625
+  cx: 331.1368103027344
+  cy: 236.033203125
+  distortion_model: "plumb_bob"   # rectified 输出 D≈0（实测 d 全 0）
 
   # 深度
   depth_scale: 0.001              # 16UC1 mm -> 米

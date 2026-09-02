@@ -1,4 +1,7 @@
-"""camera 子模块：D435i 数据读取 / RGB-D 对齐 / 内参 / IMU / 时间戳同步。
+from .intrinsics import CameraIntrinsics
+from .synced_frame import SyncedFrame
+from .backproject import backproject, backproject_torch, project, to_zup_frame, CAMERA_TO_ZUP
+from .d435i_reader import D435iReader, DEPTH_SCALE
 
-对应 IMPLEMENTATION_PLAN.md 的 Phase 1。
-"""
+__all__ = ["CameraIntrinsics", "SyncedFrame", "backproject", "backproject_torch",
+           "project", "to_zup_frame", "CAMERA_TO_ZUP", "D435iReader", "DEPTH_SCALE"]

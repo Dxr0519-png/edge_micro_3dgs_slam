@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c \"import cv2\")",
+      "Bash(python3 -c \"import open3d\")",
+      "Bash(curl -sI -m 10 https://github.com -o /dev/null -w \"github.com: HTTP %{http_code}, 连接耗时 %{time_connect}s, 总耗时 %{time_total}s\\\\n\")",
+      "Bash(curl -sI -m 10 https://codeload.github.com -o /dev/null -w \"codeload.github.com: HTTP %{http_code}\\\\n\")",
+      "Bash(python3 -)",
+      "Read(//tmp/**)",
+      "Bash(break)",
+      "Bash(pip3 install *)",
+      "Bash(lsmod)",
+      "Bash(tail -20 /tmp/rs_launch3.log)",
+      "Bash(sed -n '130,175p' /home/zc/semantic_ws/semantic_vins_fusion/docker/realsense/rs_launch.py)",
+      "Read(//home/zc/semantic_ws/semantic_vins_fusion/docker/realsense/**)"
+    ]
+  }
+}

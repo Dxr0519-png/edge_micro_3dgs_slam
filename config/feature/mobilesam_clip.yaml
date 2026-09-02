@@ -1,4 +1,6 @@
-# 边缘端开放词汇特征工厂（Phase 5）配置占位
+# 边缘端开放词汇特征工厂（Phase 5）配置
+# 注：MobileCLIP-S0 用 apple 官方包 `mobileclip` 加载（open_clip 不支持 S0，且其权重仅在
+#     HuggingFace；本网络 HF 直连不可达，经 hf-mirror.com 镜像下载原版权重到本地路径）。
 
 feature:
   sam:
@@ -11,8 +13,8 @@ feature:
       fine_points_per_side: 32
 
   clip:
-    name: "MobileCLIP-S0"        # 或 S1 / TinyCLIP
-    pretrained: "datacomp_xl_s13b_b90k"
+    name: "MobileCLIP-S0"        # apple 官方包 mobileclip 的模型名（mobileclip_s0）
+    pretrained: "data/checkpoints/mobileclip_s0.pt"   # 原版权重本地路径（替代 datacomp_xl_s13b_b90k）
     dim: 512                     # 输出维度
     input_size: 224
 
@@ -25,4 +27,4 @@ feature:
 
   cache:
     format: "mask_level"         # 掩码级（非逐像素，省显存）
-    path: "data/outputs/feature_map.pkl"
+    path: "data/outputs/phase5/feature_map.pkl"   # 按项目 outputs/phaseN/ 惯例
