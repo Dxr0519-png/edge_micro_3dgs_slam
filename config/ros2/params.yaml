@@ -7,7 +7,8 @@ edge_3dgs_slam_node:
     depth_topic: "/camera/aligned_depth_to_color/image_raw"
     color_info_topic: "/camera/color/camera_info"
     depth_info_topic: "/camera/aligned_depth_to_color/camera_info"
-    imu_topic: "/imu"
+    imu_topic: "/imu_corrected"   # kalibr 校正后 IMU（imu_corrector.py 发布）；
+                                  # 无此话题/无样本时跟踪自动回退恒速初值
 
     # 发布话题
     pose_tf_frame: "map"

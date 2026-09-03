@@ -161,3 +161,54 @@ Replica（office0 有真实感物体纹理）或 D435i 自采；**合成序列�
 7. **查询服务集成坑**：symlink-install 下路径解析（按目录特征找仓库根）、backend 惰性
    引用（动态传参）、Query.srv 嵌套解包（`req.request`/`resp.result`）、load_ply 的
    logit_opacities 形状 (N,1)（cloud_publisher 依赖）——详见验证报告 §4。
+
+---
+
+## §10. 真机地图 → 开放词汇查询衔接（2026-09-02 落地）
+
+补上了闭环的前两步（此前缺口见验证报告：真机只到冒烟）：
+
+### 产物（跑 SLAM 自动生成，无需额外操作）
+
+运行 `ros2 run edge_3dgs_ros edge_3dgs_slam_node -- --tier fps` 后，Ctrl-C 退出时
+自动写到 `<仓库>/data/outputs/live/`（可用 `--out DIR` 改）：
+
+| 文件 | 内容 | 用途 |
+|---|---|---|
+| `map_<时间戳>.pt` / `map_latest.pt` | {'params','variables'} 全量地图（float32，与 node `--load` 同构，200k 高斯 ~13MB） | 蒸馏/查询加载 |
+| `map_autosave.pt` | 每 `--autosave-sec`（默认 120s）覆盖写 | 长跑防丢 |
+| `frames.npz` | 关键帧：rgb(N,H,W,3) uint8 / depth float32 米 / poses(N,4,4) **w2c 与地图同世界系** / K / t | 特征提取帧源 |
+
+关键帧由 backend `on_keyframe` 钩子记录（锁外 ~ms 级，环形保留最近
+`--record-max` 帧，默认 150；提取成本 13s/帧 @Jetson，150 帧≈30min，够挑子集）。
+
+### 接下游（离线，已完成适配 2026-09-02，脚本在 experiments/）
+
+```
+1) 建图：ros2 run ... -- --tier fps   → Ctrl-C 自动产出 map_*.pt + frames.npz
+2+3) 真机一键语义化（提取→AE→蒸馏→验收→checkpoint）：
+   python3 experiments/phase6_semantic_live.py \
+       --map data/outputs/live/map_latest.pt \
+       --npz data/outputs/live/frames.npz --max-frames 24
+   （可拆 --extract-only / --distill-only 断点续跑；产物 data/outputs/live_semantic/）
+4) 查询：ros2 run ... --load data/outputs/live_semantic/probe_map_p6.pt
+   → ros2 service call /semantic_query/query ...
+```
+
+新增组件：`src/edge_3dgs_slam/dataset/live_npz.py`（LiveNpzSequence：npz 关键帧序列，
+接口对齐 ReplicaSequence——frame/frame_scaled/poses_w2c/cam，位姿与地图同世界系）；
+`experiments/phase6_semantic_live.py`（Replica 提取/蒸馏流程的真机版，pkl/segs 键
+契约一致，可复用 feature_factory / language_field.optim 全部库函数）。
+
+**真机小数据冒烟（2026-09-02，5 帧桌面 npz 抽 3 帧 @640×360）**：提取 11-12s/帧、
+62-69 掩码/帧；AE cos 0.95 ✅；预对齐 PSNR 18.5dB（fps 档地图+记录位姿天然对齐，
+无需 --skip-gate）；蒸馏 30 轮 cos_train 0.785（<0.85 判据——冒烟只跑 30 轮/3 帧，
+正式用 ≥24 帧 + 200 轮）。
+
+### 记录器实现备忘
+
+- `ws_src/edge_3dgs_ros/edge_3dgs_ros/live_recorder.py`（LiveRecorder，npz 契约与
+  phase4_replay_publisher 同款）；backend `on_keyframe` 钩子 + `save_checkpoint()`
+  （variables 含非张量标量如 scene_radius，需 isinstance 守卫——首版踩坑）。
+- 单测：LiveRecorder 环形保留/往返 ✅；真机冒烟：5 帧/200k 图落盘 + `--load`
+  加载往返 ✅（map 200000 高斯，scene_radius 保留）。

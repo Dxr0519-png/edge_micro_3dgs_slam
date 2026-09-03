@@ -34,7 +34,8 @@ def track(frame: SyncedFrame, gaussians: GaussianModel, T_wc_init: np.ndarray,
           early_stop: bool = False, early_stop_patience: int = 2,
           early_stop_min_iters: int = 2, early_stop_tol: float = 1e-4,
           adaptive_max: int | None = None,
-          fail_rot_deg: float = 45.0, fail_trans_m: float = 1.0) -> torch.Tensor:
+          fail_rot_deg: float = 45.0, fail_trans_m: float = 1.0,
+          iters_log: list | None = None) -> torch.Tensor:
     """追踪一帧的相机位姿（世界→相机）。
 
     参数:
@@ -85,6 +86,7 @@ def track(frame: SyncedFrame, gaussians: GaussianModel, T_wc_init: np.ndarray,
 
     best = None
     global_i = 0
+    steps = 0                     # 实际执行迭代数（2026-09-02 iters_log 用）
     for W, H, n_iter in stages:
         fd = downsample_frame(frame, W, H) if res_schedule is not None else frame
         rgb_t, depth_t, K = _to_cuda(fd)
@@ -132,6 +134,7 @@ def track(frame: SyncedFrame, gaussians: GaussianModel, T_wc_init: np.ndarray,
             opt.zero_grad()
             loss.backward()
             opt.step()
+            steps += 1
             with torch.no_grad():
                 # Phase 4：best 跟踪 GPU 侧收集，阶段末一次 argmin（原每迭代
                 # .item() 同步 2 次；loss 数值可比，argmin 与运行最小等价）
@@ -167,6 +170,8 @@ def track(frame: SyncedFrame, gaussians: GaussianModel, T_wc_init: np.ndarray,
             best = stage_track[best_i][1]
     with torch.no_grad():
         if best is None:
+            if iters_log is not None:
+                iters_log.append(steps)
             return (se3_exp(torch.cat([d_rot, d_tr])) @ T).detach()
         # 失败检测：估计与初值差异过大说明优化落入远距离局部极小（常见于
         # silhouette mask 太松被"翻转视角"exploit），视为跟踪失败并回退初值
@@ -178,5 +183,9 @@ def track(frame: SyncedFrame, gaussians: GaussianModel, T_wc_init: np.ndarray,
         if not bool(torch.isfinite(d).all().item()) \
                 or d[:3].norm() > float(np.deg2rad(fail_rot_deg)) \
                 or d[3:].norm() > fail_trans_m:
+            if iters_log is not None:
+                iters_log.append(steps)
             return T.detach()
+    if iters_log is not None:
+        iters_log.append(steps)
     return best

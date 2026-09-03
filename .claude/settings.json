@@ -12,7 +12,23 @@
       "Bash(lsmod)",
       "Bash(tail -20 /tmp/rs_launch3.log)",
       "Bash(sed -n '130,175p' /home/zc/semantic_ws/semantic_vins_fusion/docker/realsense/rs_launch.py)",
-      "Read(//home/zc/semantic_ws/semantic_vins_fusion/docker/realsense/**)"
+      "Read(//home/zc/semantic_ws/semantic_vins_fusion/docker/realsense/**)",
+      "Bash(python3 -c \"from rosbags.highlevel import AnyReader; print\\('rosbags OK'\\)\")",
+      "Bash(sed -i 's/deserialize_ros1/deserialize_cdr/g' experiments/offline_capture_bag.py)",
+      "Bash(python3 experiments/offline_capture_bag.py ~/room_scan data/outputs/offline)",
+      "Bash(python3 experiments/offline_capture_bag.py --out data/outputs/offline ~/room_scan)",
+      "Bash(python3 -m py_compile experiments/offline_rebuild.py)",
+      "Bash(python3 experiments/offline_rebuild.py data/outputs/offline --out data/outputs/offline_out --polish-iters 60)",
+      "Bash(python3 experiments/offline_rebuild.py data/outputs/offline --out data/outputs/offline_out)",
+      "Bash(python3 experiments/offline_rebuild.py data/outputs/offline_half --out data/outputs/offline_half_out --no-imu)",
+      "Bash(python3 -m py_compile src/edge_3dgs_slam/gaussian/model.py src/edge_3dgs_slam/slam/mapping.py)",
+      "Bash(python3 experiments/offline_rebuild.py data/outputs/offline_half --out data/outputs/offline_half_v2_out --no-imu)",
+      "Bash(python3 experiments/offline_capture_bag.py --out data/outputs/offline2 ~/room_scan2)",
+      "Bash(python3 experiments/offline_rebuild.py data/outputs/offline2 --out data/outputs/offline2_out --no-imu)",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 experiments/offline_rebuild.py data/outputs/offline_replica --out data/outputs/offline_replica_out --no-imu)",
+      "Bash(awk '{print $NF}')",
+      "Bash(git rev-list *)"
     ]
   }
 }

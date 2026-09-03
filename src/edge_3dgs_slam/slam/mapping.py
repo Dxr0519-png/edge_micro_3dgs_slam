@@ -32,7 +32,9 @@ _SIL_THRES = 0.5        # 加高斯阈值：silhouette 低于此的像素补高�
 
 def _add_new_gaussians(frame: SyncedFrame, model: GaussianModel, T_wc: np.ndarray,
                        sil: torch.Tensor, max_new: int = 20000,
-                       density_r: float | None = None) -> tuple[int, int]:
+                       density_r: float | None = None,
+                       seed_opacity: float = 0.5,
+                       seed_scale_factor: float = 2.0) -> tuple[int, int]:
     """在 silhouette < 阈值（无高斯覆盖）且深度有效的像素处反投影新增高斯。
 
     返回 (added, density_blocked)：density_r 给定时（Phase 3 §2 密度判据），
@@ -69,8 +71,11 @@ def _add_new_gaussians(frame: SyncedFrame, model: GaussianModel, T_wc: np.ndarra
         keep = torch.randperm(pts_world.shape[0], device="cuda")[:max_new]
         pts_world, new_colors, depth_z = pts_world[keep], new_colors[keep], depth_z[keep]
     focal = (frame.K[0, 0] + frame.K[1, 1]) / 2.0
-    scales = 2.0 * depth_z / focal           # 与 init_from_depth 的 ×2 保持一致
-    return model.add_gaussians(pts_world, new_colors, scales=scales), n_blocked
+    # 2026-09-02：seed_scale_factor 可调小播种尺度（默认 2.0 与 init 一致；
+    # 更小尺度 → 更少重叠 → 透叠轻）
+    scales = seed_scale_factor * depth_z / focal
+    return model.add_gaussians(pts_world, new_colors, scales=scales,
+                               opacity=seed_opacity), n_blocked
 
 
 def _iso_loss(model: GaussianModel) -> torch.Tensor:
@@ -85,7 +90,11 @@ def map_keyframe(frame: SyncedFrame, gaussians: GaussianModel, T_wc: np.ndarray,
                  cull: bool = False, window: list | None = None,
                  max_new: int = 20000, opt_W: int | None = None,
                  opt_H: int | None = None, window_rotate: bool = False,
-                 rotate_n: int = 2, map_tier: str = "full") -> dict:
+                 rotate_n: int = 2, map_tier: str = "full",
+                 seed_W: int | None = None, seed_H: int | None = None,
+                 depth_every: int = 1, seed_opacity: float = 0.5,
+                 seed_scale_factor: float = 2.0,
+                 prune_opacity: float = 0.005) -> dict:
     """对一帧关键帧执行建图优化（原地修改 gaussians）。
 
     参数:
@@ -108,6 +117,13 @@ def map_keyframe(frame: SyncedFrame, gaussians: GaussianModel, T_wc: np.ndarray,
                    轮序）而非全窗口（window=5 时渲染量 5→2）。每帧单关键帧内被
                    访问 ≥3 次（iters=8×2/5≈3.2）时质量与全窗口近似（探针验证）。
                    与 opt_W/H 组合：每关键帧渲染量 ≈ iters×rotate_n 次低分辨率渲染。
+        seed_W/H:  2026-09-02 队列压力降档——播种（add_new 的 silhouette 渲染 +
+                   反投影）在降采样分辨率执行（默认 None = 原生 640×480，@200k
+                   量级 ~150-250ms/关键帧）。低分辨率播种会漏薄结构，仅在队列积压
+                   档使用，空闲档恢复原生。
+        depth_every: 2026-09-02 建图迭代 depth 隔趟——每 N 迭代只渲染一次
+                   depth/silhouette 第二趟（loss 的 depth 项缺席趟跳过，sil 只在
+                   播种渲染，不依赖迭代趟）；省 ~1/3 光栅化前向+反传。
 
     返回:
         统计 dict：新增/密度阻挡/剪枝/容量淘汰数、窗口大小、最终 loss
@@ -126,20 +142,29 @@ def map_keyframe(frame: SyncedFrame, gaussians: GaussianModel, T_wc: np.ndarray,
             vis_f = frustum_visible(gaussians.means3D.detach(), T_f_t.detach(), K_f,
                                     H, W, scales=gaussians.scales().detach())
         prep.append((rgb_t, depth_t, K_f, T_f_t, (depth_t > 0).detach(), vis_f))
-    # add_new 用原生帧渲染 silhouette：单独缓存最新帧的原生 (K, T)
-    native_T = torch.as_tensor(np.asarray(T_wc, dtype=np.float32)).cuda().float()
-    native_K = torch.as_tensor(np.asarray(frame.K, dtype=np.float32))
-    native_H, native_W = frame.depth.shape
+    # 播种帧：默认原生分辨率（薄结构不漏播）；seed_W/H 给定时（队列压力档）
+    # 降采样播种（K 随 downsample_frame 缩放，sil/反投影同分辨率自洽）
+    seed_frame = downsample_frame(frame, seed_W, seed_H) if (seed_W and seed_H) else frame
+    sil_frame_T = torch.as_tensor(np.asarray(T_wc, dtype=np.float32)).cuda().float()
+    sil_frame_K = torch.as_tensor(np.asarray(seed_frame.K, dtype=np.float32))
+    sil_H, sil_W = seed_frame.depth.shape
 
     # 1) 反投影新增高斯（用当前模型渲染 silhouette 找无覆盖像素；只对最新帧，
-    #    原生分辨率——低分辨率下薄结构像素消失会漏播高斯，播种质量不降）
+    #    默认原生分辨率——低分辨率下薄结构像素消失会漏播高斯，播种质量不降）
     added = n_blocked = 0
-    if add_new:
+    at_capacity = bool(
+        capacity_max is not None and gaussians.num_gaussians >= capacity_max)
+    if add_new and not at_capacity:
+        # 2026-09-02：容量已满时跳过播种——silhouette 必全覆盖（无位置可加），
+        # 原生分辨率全模型渲染纯属浪费（@200k 量级 150-250ms/关键帧，实测是
+        # 建图每 KF 成本最大单项；200k 封顶的稳态下每个 KF 都在白付这笔钱）
         with torch.no_grad():
-            _, _, sil, _, _ = render(gaussians, native_T, native_K, native_W,
-                                     native_H, gaussians_grad=False, camera_grad=False)
-        added, n_blocked = _add_new_gaussians(frame, gaussians, T_wc, sil,
-                                              max_new=max_new, density_r=density_r)
+            _, _, sil, _, _ = render(gaussians, sil_frame_T, sil_frame_K, sil_W,
+                                     sil_H, gaussians_grad=False, camera_grad=False)
+        added, n_blocked = _add_new_gaussians(seed_frame, gaussians, T_wc, sil,
+                                              max_new=max_new, density_r=density_r,
+                                              seed_opacity=seed_opacity,
+                                              seed_scale_factor=seed_scale_factor)
         # 新增后窗口帧的 vis 掩码可能变化（新高斯未必可见）——重建
         if cull:
             prep = []
@@ -170,6 +195,7 @@ def map_keyframe(frame: SyncedFrame, gaussians: GaussianModel, T_wc: np.ndarray,
         n_win = len(prep)
         for k in range(iters):
             total = None
+            need_d = (depth_every <= 1) or (k % depth_every == 0)   # depth 隔趟
             if window_rotate and n_win > rotate_n:
                 # 确定性轮序：迭代 k 选 [k*rotate_n, k*rotate_n+rotate_n) 环绕的帧集
                 sel = [(k * rotate_n + j) % n_win for j in range(rotate_n)]
@@ -180,12 +206,13 @@ def map_keyframe(frame: SyncedFrame, gaussians: GaussianModel, T_wc: np.ndarray,
                 H, W = depth_t.shape[1:3]
                 im, depth, sil, _, _ = render(gaussians, T_f_t, K_f, W, H,
                                               gaussians_grad=True, camera_grad=False,
-                                              mask=vis_f)
+                                              mask=vis_f, needs_depth=need_d)
                 l_rgb = 0.8 * torch.abs(im - rgb_t).mean()
                 l_ssim = 0.2 * (1.0 - calc_ssim(im.unsqueeze(0), rgb_t.unsqueeze(0)))
-                l_depth = torch.abs(depth - depth_t)[depth_mask].mean() if depth_mask.any() \
-                    else torch.abs(depth - depth_t).mean()
-                l = 0.5 * (l_rgb + l_ssim) + 1.0 * l_depth + _LAMBDA_ISO * _iso_loss(gaussians)
+                l = 0.5 * (l_rgb + l_ssim) + _LAMBDA_ISO * _iso_loss(gaussians)
+                if need_d:
+                    l = l + 1.0 * (torch.abs(depth - depth_t)[depth_mask].mean()
+                                   if depth_mask.any() else torch.abs(depth - depth_t).mean())
                 total = l if total is None else total + l
             loss = total / len(frame_iter)
             opt.zero_grad()
@@ -199,7 +226,7 @@ def map_keyframe(frame: SyncedFrame, gaussians: GaussianModel, T_wc: np.ndarray,
     pruned = capped = 0
     if prune:
         n_before = gaussians.num_gaussians
-        gaussians.prune(opacity_threshold=0.005, big_scale=0.1 * scene_radius)
+        gaussians.prune(opacity_threshold=prune_opacity, big_scale=0.1 * scene_radius)
         pruned = n_before - gaussians.num_gaussians
     if capacity_max is not None:
         n_before = gaussians.num_gaussians
@@ -209,4 +236,5 @@ def map_keyframe(frame: SyncedFrame, gaussians: GaussianModel, T_wc: np.ndarray,
     return {"added": added, "density_blocked": n_blocked, "pruned": pruned,
             "capped": capped, "window_size": len(prep),
             "num_gaussians": gaussians.num_gaussians,
+            "at_capacity": at_capacity,
             "loss": loss.item() if loss is not None else None}

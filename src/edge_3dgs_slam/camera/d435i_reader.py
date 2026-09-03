@@ -40,7 +40,18 @@ class D435iReader:
         self.ts.registerCallback(self._on_sync)
         self.K: CameraIntrinsics | None = None
         node.create_subscription(CameraInfo, t["info_topic"], self._on_info, 10)
-        node.create_subscription(Imu, t["imu_topic"], self._on_imu, 200)
+        # 2026-09-02 IMU 订阅双修（真机实测两坑）：
+        #  1) QoS 必须 best_effort——imu_corrector 以 sensor_data 发布，默认
+        #     reliable 订阅不兼容 → 一条消息都收不到；
+        #  2) 必须独立 Reentrant 回调组——图像 sync 回调（track 200ms+ 量级）
+        #     独占默认 MutuallyExclusive 组时 IMU 回调永远轮不到（~100% 占用
+        #     时缓冲恒空，先验永不命中）
+        from rclpy.callback_groups import ReentrantCallbackGroup
+        from rclpy.qos import qos_profile_sensor_data
+        self._imu_group = ReentrantCallbackGroup()
+        node.create_subscription(Imu, t["imu_topic"], self._on_imu,
+                                 qos_profile_sensor_data,
+                                 callback_group=self._imu_group)
         self.imu_buffer = collections.deque(maxlen=400)   # 环形缓存，为 VIO 预留
 
     # ---- 回调 ----
@@ -51,9 +62,14 @@ class D435iReader:
                                         f"cx={self.K.cx:.2f} cy={self.K.cy:.2f}")
 
     def _on_imu(self, msg):
+        # ⚠️ msg.linear_acceleration 是 Vector3 对象不是序列——np.array(Vector3)
+        # 会 TypeError（float(Vector3) 失败），真机实测：回调每条 IMU 都崩、
+        # 缓冲恒空、IMU 先验永不命中。逐分量取数（2026-09-02 修复）
+        a = msg.linear_acceleration
+        g = msg.angular_velocity
         self.imu_buffer.append((self._stamp_sec(msg.header.stamp),
-                                np.array(msg.linear_acceleration, dtype=np.float64),
-                                np.array(msg.angular_velocity, dtype=np.float64)))
+                                np.array([a.x, a.y, a.z], dtype=np.float64),
+                                np.array([g.x, g.y, g.z], dtype=np.float64)))
 
     def _on_sync(self, rgb_msg, depth_msg):
         if self.K is None:                      # camera_info 未到先丢帧

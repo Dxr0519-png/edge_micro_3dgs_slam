@@ -123,7 +123,7 @@ source ws_src/install/setup.bash
 
 # ② 起相机 + SLAM 节点（camera_namespace:=/ 必须：旧版 realsense-ros 缺了会 /camera/camera/ 双前缀）
 ros2 launch realsense2_camera rs_launch.py camera_namespace:=/ align_depth.enable:=true &
-ros2 run edge_3dgs_ros edge_3dgs_slam_node            # 完整 SLAM（首帧初始化+在线建图）
+ros2 run edge_3dgs_ros edge_3dgs_slam_node            # 在线实验模式（首帧初始化+建图，实测 3–9 Hz，见验证报告 §5）
 ros2 run edge_3dgs_ros edge_3dgs_slam_node -- --load data/outputs/phase3/probe_model_replica.pt \
     --tier fps                                        # --load 只 track；--tier fps|quality 双档
 
@@ -140,7 +140,7 @@ rviz2                                 # Add → PointCloud2 /gaussian_map_pc2, F
 
 **验证数据约定**（docs/00 §7 统一口径）：接口/回放测试用 **Replica 或合成序列回放**为话题流
 （离线评估数据 → 节点输入，可复现、无硬件依赖）；真机最终验证走 **D435i 自采**（Phase 1 数据流）。
-两阶段都要做：回放验证接口正确性，真机验证实时性。
+两阶段都要做：回放验证接口正确性，真机验证采集/录制与节点稳定性（在线 SLAM 实时性仅作实验记录——quality 档 ~9.1 Hz / fps 档 ~3–5 Hz、稳定 10 FPS 不可达，结论见验证报告 §5，交付口径为离线重建）。
 
 - [x] `colcon build` 通过，消息接口可 `ros2 interface show`。
       （2026-08-29：msgs 12.4s / ros 2.9s 构建 0 错误；5 个 msg 全部可查询）

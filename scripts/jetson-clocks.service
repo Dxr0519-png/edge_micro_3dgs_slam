@@ -1,0 +1,13 @@
+[Unit]
+Description=Lock Jetson CPU/GPU clocks to max (required for real-time 3DGS-SLAM)
+# nvhost_podgov idles GPU to 306MHz between frame bursts; SLAM FPS drops ~5x.
+# Measured 2026-09-02: render 7ms sustained vs 86ms cold-start single-shot.
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/jetson_clocks
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

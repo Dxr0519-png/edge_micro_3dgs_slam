@@ -101,6 +101,15 @@ def _se3_log_np(T: np.ndarray) -> np.ndarray:
     return np.concatenate([w, J_inv @ t])
 
 
+def se3_motion_np(A: np.ndarray, B: np.ndarray) -> np.ndarray:
+    """位姿 A→B 的 se(3) 增量 (6,)（numpy，2026-09-02 ICP 运动门控用）。
+
+    backend 每处理帧用上一帧位姿与恒速预测位姿的差判断"相机是否在动"——
+    静态/慢速段恒速初值已足够准，ICP（~80ms/帧，实测含失败重试）纯属浪费。
+    """
+    return _se3_log_np(_inv4(A) @ B)
+
+
 def _depth_normals(d_target: np.ndarray, K: np.ndarray) -> np.ndarray:
     """目标 depth 的中心差分数向：(H,W,3) 单位法向（朝相机，z 分量恒正）。"""
     H, W = d_target.shape

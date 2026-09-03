@@ -107,13 +107,15 @@ class GaussianModel:
         return F.normalize(self.params["unnorm_rotations"])
 
     # ------------------------------------------------------------------ 增删
-    def add_gaussians(self, pts, colors, scales=None):
+    def add_gaussians(self, pts, colors, scales=None, opacity: float = 0.5):
         """追加新高斯（文档 §6 第 1 步：无高斯覆盖像素处反投影新增）。
 
         Phase 6 §1：模型含 feature 通道时同步追加零初始化特征（(new_n, D)）——
         特征在蒸馏阶段学习，新增高斯先用 0（语义中性）再蒸馏填充。
+        opacity: 2026-09-02 播种初始不透明度——0.5 起步叠加易成半透明透叠
+        （重影观感主因之一）；调高（如 0.75）让表面从出生即近实心，收敛更快。
         """
-        new = GaussianModel.create_from_points(pts, colors, scales, opacity=0.5,
+        new = GaussianModel.create_from_points(pts, colors, scales, opacity=opacity,
                                                anisotropic=not self.is_isotropic)
         for k in PARAM_KEYS:
             # Phase 3 §3：FP16 存储下必须对齐 dtype（torch.cat 混合 dtype 直接报错）

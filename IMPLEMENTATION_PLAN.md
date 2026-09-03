@@ -6,11 +6,13 @@
 
 ---
 
+> **2026-09-02 状态修订**：本文档为规划文本（部分条目已执行），**执行结果与最终口径以 `docs/00 §1` 及各 Phase 验证报告为准**。原「**在线实时建图（Tracking 稳定 ≥15 FPS）**」目标经实测在 Jetson 上**不可达**（quality 档 ~9.1 Hz / fps 档 ~3–5 Hz，稳定 10 FPS 不可达；见 `docs/04_Phase4_验证报告.md`），交付定位修订为：**Jetson 采集 → 板卡本地离线两遍式 3DGS 稠密重建 + 开放词汇语义查询**（无实时约束、无外部算力）。本文档残余的「保实时」类规划文字均属该废弃目标的历史记录。
+
 ## 0. 项目定位与总体架构
 
 ### 0.1 一句话定位
 
-把**开放词汇大模型特征**（MobileSAM 万物分割 + MobileCLIP 文本-图像对齐向量）蒸馏进 **RGB-D 3D Gaussian Splatting SLAM** 的高斯场，在 **Jetson Orin NX 边缘板卡**上实现**实时位姿追踪 + 建图 + 自然语言空间定位**。
+把**开放词汇大模型特征**（MobileSAM 万物分割 + MobileCLIP 文本-图像对齐向量）蒸馏进 **RGB-D 3DGS 重建**的高斯场：在 **Jetson Orin NX** 上采集 D435i 的 RGB-D + IMU，**离线**以免 COLMAP 的 SplaTAM 式位姿估计与两遍式稠密建图生成场景模型，再嵌入语言特征，实现**自然语言三维空间定位**（在线实时口径见文首状态修订）。
 
 ### 0.2 与现有工作的关系
 
@@ -61,7 +63,7 @@ Phase 1(边缘基础设施+D435i数据流)
 ```
 
 - Phase 2 与 Phase 5 在代码上**互相独立**，可并行开发；但 **Phase 6 同时依赖 Phase 4 和 Phase 5 的产物**，是汇合点。
-- Phase 3 依赖 Phase 2 的几何骨架；Phase 4 依赖 Phase 3 的优化后管线（保证封装的是「能实时跑的」版本）。
+- Phase 3 依赖 Phase 2 的几何骨架；Phase 4 依赖 Phase 3 的优化后管线（封装 Phase 3 优化结果）。
 - Phase 5 只依赖 Phase 1（相机数据流），可在 Phase 2/3 开发期间并行推进。
 
 ### 0.5 术语表
@@ -347,7 +349,7 @@ L_map = L_track + λ_iso · Σᵢ ‖scaleᵢ − mean(scaleᵢ)‖₂
 
 ### 3.1 目标
 
-在 16GB 统一内存、有限算力约束下，让 Tracking 维持 **15–30 FPS**，防止 OOM，并把优化点沉淀为可量化的「壁垒」。
+在 16GB 统一内存、有限算力约束下控制建图/优化的显存峰值（防 OOM），把优化点沉淀为可量化消融（原「维持 15–30 FPS 实时 Tracking」目标已实测不可达并废弃，见文首状态修订）。
 
 ### 3.2 输入 / 输出
 
@@ -377,7 +379,7 @@ L_map = L_track + λ_iso · Σᵢ ‖scaleᵢ − mean(scaleᵢ)‖₂
 3. **渲染分辨率分档**：Tracking 用降采样（如 320×240）快速迭代，Mapping 用全分辨率（640×480）精化。
 4. **限制每 tile 高斯数 / 总渲染高斯数**：`max_sh_degree=0`（不用 SH）、限制活跃高斯上限，直接砍渲染耗时。
 
-### 3.5 关键帧管理机制（保实时）
+### 3.5 关键帧管理机制（滑动窗口 + 异步建图，在线实验口径）
 
 - **插入判据**：位姿相对上一关键帧的平移 `Δt > τ_t`（如 0.1m）或旋转 `Δθ > τ_θ`（如 3°）时插入新关键帧；或共视比 `< τ_cov` 时插入。
 - **滑动窗口**：仅最近 `K`（如 5~8）个关键帧参与 Mapping 优化，旧关键帧高斯冻结，控制单步优化规模。
@@ -391,7 +393,7 @@ L_map = L_track + λ_iso · Σᵢ ‖scaleᵢ − mean(scaleᵢ)‖₂
 
 ### 3.7 验收标准
 
-- [ ] D435i 实时序列 Tracking 稳定 **≥15 FPS**（目标 30），不因建图卡顿掉帧。
+- [x] ~~D435i 实时序列 Tracking 稳定 ≥15 FPS（目标 30）~~ → **实测取消**：真机稳定 10 FPS 不可达（quality 档 ~9.1 Hz / fps 档 ~3–5 Hz，见 docs/04_Phase4_验证报告.md §5）；在线口径废弃，交付改为离线重建（docs/00 §1）。
 - [ ] 峰值显存 < 预算（给出预算表），全程无 OOM。
 - [ ] 剪枝/量化后 ATE 与 PSNR 相对 Phase 2 **不显著劣化**（ATE 劣化 < 20%，PSNR 下降 < 2dB）。
 - [ ] 形成一份可写进简历的**量化消融表**（FP16、视锥剔除、关键帧窗口各自带来的 FPS/显存增益）。
@@ -402,7 +404,7 @@ L_map = L_track + λ_iso · Σᵢ ‖scaleᵢ − mean(scaleᵢ)‖₂
 
 ### 4.1 目标
 
-把优化后的 3DGS-SLAM 管线封装为 ROS2 Humble Node，实现「订阅 RGB-D/IMU → 在线 Tracking/Mapping → 发布位姿与高斯点云」的机器人感知闭环。
+把重建管线与数据链路封装为 ROS2 Humble Node，实现「订阅 RGB-D/IMU → 采集录制（bag/npz 分块）/ 回放评测 → 发布高斯点云与查询服务」的采集与接口层；在线端到端 Tracking/Mapping 模式仅作实验与瓶颈量化，结论见 `docs/04_Phase4_验证报告.md`。
 
 ### 4.2 订阅 / 发布接口
 
@@ -420,7 +422,7 @@ L_map = L_track + λ_iso · Σᵢ ‖scaleᵢ − mean(scaleᵢ)‖₂
 
 | 话题 | 类型 | 说明 |
 |---|---|---|
-| `/tf` | `tf2_msgs/TFMessage` | `map→odom→camera` 实时 6DoF 位姿 |
+| `/tf` | `tf2_msgs/TFMessage` | `map→odom→camera` 6DoF 位姿（离线重建/评测用） |
 | `/odom` | `nav_msgs/Odometry` | 相机里程计位姿（可选冗余） |
 | `/gaussian_map` | `edge_3dgs_msgs/msg/GaussianCloud` | 轻量化高斯点云（可视化） |
 | `/rendered_image` | `sensor_msgs/Image` | 渲染合成图（可选，调试/质检） |

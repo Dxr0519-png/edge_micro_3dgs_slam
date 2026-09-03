@@ -1,8 +1,8 @@
 # Edge-3DGS-SLAM
 
-基于 **3D Gaussian Splatting SLAM** 与 **开放词汇大模型特征** 的 **边缘端具身感知大脑**，部署在 **Nvidia Jetson Orin NX** 上，输入 **Intel RealSense D435i** 的 RGB-D + IMU。
+面向 **Nvidia Jetson Orin NX** 的 **RGB-D 语义 3DGS 重建系统**：采集 **Intel RealSense D435i** 的 RGB-D + IMU 数据，在板卡本地**离线**完成免 COLMAP 的两遍式 3DGS 稠密重建（自研 SplaTAM 式位姿估计与 Tracking/Mapping，质量优先、无实时约束），并把开放词汇语义特征（MobileSAM 掩码 + MobileCLIP 对齐向量）蒸馏进高斯场，支持自然语言指令的三维空间定位（如「找到黑色的椅子」→ 3D BBox / 热力图）。
 
-把开放词汇语义特征蒸馏进 RGB-D 3DGS-SLAM 的高斯场，使边缘机器人能**听懂自然语言指令**（如「找到黑色的椅子」）并在三维空间中定位、框选、导航到目标。
+**设计取舍**：3DGS 稠密建图每帧需数百 ms 级可微优化，端到端在线建图在 Jetson 上实测仅 3–9 Hz、无法稳定实时（见 `docs/04_Phase4_验证报告.md`）——因此采用**采集与重建解耦**的形态：板卡按高帧率录制原始数据（rosbag → npz 分块），重建作为无实时约束的批处理任务在板卡本地完成（关键帧窗口全局抛光），全程无外部算力。
 
 > 详细技术路线与逐阶段执行指南见 **[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)**（唯一权威文档，请先通读）。
 
@@ -13,7 +13,7 @@
 | 模块 | 作用 | 技术栈 |
 |---|---|---|
 | `camera`（Phase 1） | D435i 数据流：RGB-D 对齐 / 内参 / IMU / 时间戳同步 | librealsense、realsense2-camera |
-| `slam`（Phase 2） | RGB-D 3DGS-SLAM：Tracking + Mapping（免 COLMAP） | SplaTAM 蓝本、diff-gaussian-rasterization |
+| `slam`（Phase 2） | RGB-D 3DGS 重建：位姿估计 + 两遍式 Tracking/Mapping（免 COLMAP，离线） | SplaTAM 蓝本、diff-gaussian-rasterization |
 | `gaussian`（Phase 2） | 高斯模型 + 可微光栅化封装 | PyTorch CUDA |
 | 优化（Phase 3） | Jetson 显存/算力优化：FP16、视锥剔除、高斯剪枝、关键帧 | — |
 | `ws_src/*`（Phase 4） | ROS2 具身接口（位姿 / 高斯点云 / 查询） | ROS2 Humble、自定义 msg |
@@ -23,9 +23,11 @@
 **数据流**：
 
 ```
-D435i ──► 对齐 RGB-D + IMU ──► Tracking(位姿) + Mapping(高斯几何场) ──┐
-  │                                                                   ├─► 语言高斯场 ──► 文本查询 ──► 3D BBox / 热力图
-  └──► MobileSAM 掩码 ──► MobileCLIP 特征图 ────────────────────────────┘
+[阶段一 · Jetson 采集]   D435i ──► RGB-D+IMU 对齐 ──► ROS2 录制（bag → npz 分块）
+[阶段二 · 离线重建]      npz ──► 位姿估计（ICP 初值 + IMU 旋转先验）
+                              ──► 两遍式 Mapping（随走随建 → 关键帧窗口全局抛光）──► 高斯场
+[语义链路]               RGB 帧 ──► MobileSAM 掩码 ──► MobileCLIP 特征图
+                              ──► AE 压缩 ──► 语言高斯场 ──► 文本查询 ──► 3D BBox / 热力图
 ```
 
 ## 目标硬件与软件
@@ -76,9 +78,9 @@ python -c "import torch; print(torch.cuda.get_device_capability())"
 | Phase | 主题 | 依赖 |
 |---|---|---|
 | 1 | 边缘基础设施构建与 D435i 数据流打通 | — |
-| 2 | 轻量级 RGB-D 3DGS-SLAM 基线（SplaTAM 蓝本，免 COLMAP） | Phase 1 |
-| 3 | Jetson 显存与性能极致优化（简历壁垒） | Phase 2 |
-| 4 | 系统封装与 ROS2 具身接口 | Phase 3 |
+| 2 | RGB-D 3DGS 重建基线（SplaTAM 蓝本：位姿估计 + Tracking/Mapping，免 COLMAP） | Phase 1 |
+| 3 | Jetson 显存/算力优化与可量化消融（FP16、剪枝、视锥剔除、关键帧窗口） | Phase 2 |
+| 4 | 系统封装与 ROS2 采集/接口层（录制、点云、查询服务） | Phase 3 |
 | 5 | [进阶] 边缘端轻量级 2D 开放词汇特征工厂 | Phase 1 |
 | 6 | [进阶] Language-Embedded 3DGS 与空间查询 | Phase 4 + 5 |
 

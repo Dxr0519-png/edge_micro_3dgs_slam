@@ -15,12 +15,13 @@ import threading
 import time
 
 import numpy as np
+import torch
 
 from ..camera import SyncedFrame
 from ..gaussian.model import GaussianModel
 from ..utils.frame_utils import downsample_frame
 from ..utils.profiling import profiled
-from .icp_init import icp_init, icp_init_model, icp_render_model_depth
+from .icp_init import icp_init, icp_init_model, icp_render_model_depth, se3_motion_np
 from .keyframe import KeyframeManager
 from .mapping import map_keyframe
 from .tracking import track
@@ -33,7 +34,15 @@ class SLAMBackend:
                  queue_maxsize: int = 8, window_size: int = 5,
                  track_W: int = 320, track_H: int = 240,
                  lock_chunk: int | None = None, lock_sleep_ms: float = 0.02,
-                 init_mode: str = "const", icp_W: int = 160, icp_H: int = 120):
+                 init_mode: str = "const", icp_W: int = 160, icp_H: int = 120,
+                 on_keyframe=None):
+        """异步 SLAM 后端。
+
+        参数:
+            on_keyframe: 2026-09-02 可选关键帧回调 callable(frame, T_wc)——每次
+                    关键帧判定成功（入队）后调用，锁外；供 LiveRecorder 记录
+                    建图帧做语义场衔接。异常被吞掉（记录器绝不影响 SLAM 主路径）。
+        """
         """异步 SLAM 后端。
 
         参数:
@@ -70,8 +79,32 @@ class SLAMBackend:
         self._prev_depth_icp = None        # 上一处理帧深度（ICP 分辨率，帧到帧目标）
         self._last_T_np = None             # 上一处理帧位姿（ICP 的 T_prev）
         self._failure_event = False        # 跟踪失败事件（ICP 退化/大转角）
-        self.stats = {"track_wall_ms": [], "track_gpu_ms": [], "dropped": 0, "mapped": 0,
-                      "icp_ms": [], "icp_fallback": 0}
+        # 2026-09-02 ICP 门控（真机实测 2026-08-29/09-02 反复验证）：
+        #   1) 每帧失败重试：真机桌面/静态段 ICP 连续 ~400+ 次全 fallback（模型
+        #      未成熟 + D435i 深度噪声 4-10cm 内点门下 ratio<0.85），每帧白烧
+        #      30-80ms（渲染 ~26ms + CPU 2ms + 同步/调度开销）且失败还置
+        #      failure_event 强迫下一帧重处理；
+        #   2) 模型成熟度门：f2m ICP 需要模型深度可信——在线建图 mapped<2 帧时
+        #      模型是单帧种子未抛光，ICP 必然失败（鸡生蛋）；--load 模式（成熟
+        #      checkpoint，iters=0 不建图）除外，恒允许；
+        #   3) 修正量门：上一帧 track 相对 CV 初值修正大（运动突变）才跑 ICP；
+        #   4) 连续失败退避：同段连续 fallback ≥2 次后暂停，直到下次成功或看门狗；
+        #   5) 看门狗：每 _watchdog_interval 帧强制跑一次，防静默漂移无感知。
+        self._gate_rot_deg = 0.5           # 修正旋转门限（°）
+        self._gate_trans_m = 0.01          # 修正平移门限（m）
+        self._last_corr: np.ndarray | None = None   # 上一帧 track 修正量 (6,)
+        self._watchdog_n = 0               # 看门狗计数
+        # 2026-09-02 run7：10→3——adaptive_max 砍到 3 后难帧兜底收紧，
+        # 静态段代价每帧平均 +10ms（ICP ~30ms/3 帧），换取运动段跟踪安全
+        self._watchdog_interval = 3
+        self._icp_fails = 0                # 自上次成功以来连续失败次数
+        self._no_map = bool((map_kwargs or {}).get("iters") == 0)   # --load 只 track
+        self.icp_skipped = 0               # 统计：被门控跳过的帧数
+        self.on_keyframe = on_keyframe     # 关键帧回调（LiveRecorder 用）
+        self.stats = {"track_wall_ms": [], "track_gpu_ms": [], "track_iters": [],
+                      "dropped": 0, "mapped": 0,
+                      "icp_ms": [], "icp_fallback": 0, "map_ms": [],
+                      "map_skipped": 0, "seed_skipped": 0}
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
@@ -97,7 +130,21 @@ class SLAMBackend:
         # - 模型稠密后：帧到模型——模型是全局锚，消除帧到帧对齐噪声的随机
         #   游走（1-2cm/步 × 50 帧累积到 6-10cm 后门槛连锁失效，实测）。
         # 退化/对应率塌陷 → 置失败事件：调度器下一帧强制处理（小运动恢复）
-        if self.init_mode == "icp" and self._last_T_np is not None:
+        # 2026-09-02 ICP 三层门控（见 __init__ 注释）：模型成熟 + 修正量大或
+        # 看门狗 + 失败退避内才执行；静态桌面段 mapped<2 → 完全跳过（每帧省
+        # 30-80ms，实测从 ~2Hz 提 FPS 的最大单项）。
+        T_init = T_wc_init
+        icp_needed = False
+        icp_capable = self._no_map or self.stats["mapped"] >= 2    # 模型成熟度门
+        if icp_capable and self.init_mode == "icp" and self._last_T_np is not None:
+            self._watchdog_n += 1
+            corr_big = (
+                self._last_corr is None                              # 首处理帧
+                or float(np.linalg.norm(self._last_corr[:3])) > np.deg2rad(self._gate_rot_deg)
+                or float(np.linalg.norm(self._last_corr[3:])) > self._gate_trans_m)
+            watchdog = self._watchdog_n % self._watchdog_interval == 0
+            icp_needed = (watchdog or corr_big) and self._icp_fails < 2
+        if icp_needed:
             t_icp = time.perf_counter()
             if self.model.num_gaussians < self._icp_f2m_min:
                 T_init, st = icp_init(frame, self._prev_depth_icp, self._last_T_np,
@@ -114,15 +161,24 @@ class SLAMBackend:
             self.stats["icp_ms"].append((time.perf_counter() - t_icp) * 1e3)
             if st["fallback"]:
                 self.stats["icp_fallback"] += 1
+                self._icp_fails += 1
+            else:
+                self._icp_fails = 0          # 成功重置退避
             if st["fallback"] or st["ratio"] < 0.5:
                 self._failure_event = True
-        else:
-            T_init = T_wc_init
+        elif self.init_mode == "icp":
+            self.icp_skipped += 1
         with self._gpu_lock:
             T_cuda, gpu_ms = profiled(track, fd_frame, self.model, T_init,
+                                      iters_log=self.stats["track_iters"],
                                       **self.track_kwargs)
             self.stats["track_gpu_ms"].append(gpu_ms)
         T_np = T_cuda.detach().cpu().numpy()
+        # 2026-09-02：记录 track 相对 CV 初值的修正量（ICP 修正量门控信号）
+        try:
+            self._last_corr = se3_motion_np(T_wc_init, T_np)
+        except Exception:
+            self._last_corr = None
         self.stats["track_wall_ms"].append((time.perf_counter() - wall_t0) * 1e3)
         # 帧到帧目标（稀疏期）：上一处理帧深度与位姿
         self._prev_depth_icp = downsample_frame(frame, self.icp_W, self.icp_H).depth
@@ -132,6 +188,11 @@ class SLAMBackend:
                 self.kf_manager.should_insert(T_np, self.last_keyframe_T):
             self._push(frame, T_np)
             self.last_keyframe_T = T_np
+            if self.on_keyframe is not None:
+                try:
+                    self.on_keyframe(frame, T_np)    # 锁外；异常吞掉不影响主路径
+                except Exception:
+                    pass
         return T_np
 
     def _push(self, frame: SyncedFrame, T_np: np.ndarray):
@@ -150,36 +211,75 @@ class SLAMBackend:
 
     # ------------------------------------------------------------------ worker
     def _loop(self):
-        """worker 线程：消费关键帧队列，按滑动窗口执行建图。"""
+        """worker 线程：消费关键帧队列，按滑动窗口执行建图。
+
+        2026-09-02 队列压力降档（docs/03 §11.4(3) 推荐形态接线）：出队时按
+        剩余积压选档，建图让出 GPU 保 Tracking——积压 ≥5 整帧跳过（丢最旧的
+        队列策略的映射端响应：与其排队烧 GPU，不如把 GPU 全给 track）；
+        积压 3-4 降为纯播种档（iters=0 + 播种降采样分辨率）；≤2 全量。
+        """
         while not self._stop.is_set():
             try:
                 frame, T = self.map_queue.get(timeout=0.2)
             except queue.Empty:
                 continue
+            backlog = self.map_queue.qsize()
+            if backlog >= 5:
+                self.stats["map_skipped"] += 1     # 整帧跳过（GPU 全给 track）
+                continue
+            kw = dict(self.map_kwargs)
+            if backlog >= 3:
+                # 积压档：只播种不优化（保新区域覆盖，Polish 留给空闲档），
+                # 播种降到 opt 分辨率省原生渲染（~150-250ms → ~30ms @200k）
+                kw.update(iters=0, map_tier="addonly", capacity_max=None)
+                if kw.get("opt_W") and kw.get("opt_H"):
+                    kw.update(seed_W=kw["opt_W"], seed_H=kw["opt_H"])
             self.keyframes.append((frame, T))
-            if self.lock_chunk is None:
+            t0 = time.perf_counter()
+            if self.lock_chunk is None or kw.get("iters", 1) == 0:
                 with self._gpu_lock:
-                    map_keyframe(frame, self.model, T,
-                                 window=list(self.keyframes), **self.map_kwargs)
+                    r = map_keyframe(frame, self.model, T,
+                                     window=list(self.keyframes), **kw)
             else:
-                self._map_keyframe_chunked(frame, T)   # 内部自管锁
+                r = self._map_keyframe_chunked(frame, T, kw)   # 内部自管锁
+            if r and r.get("at_capacity"):
+                self.stats["seed_skipped"] += 1
+            self.stats["map_ms"].append((time.perf_counter() - t0) * 1e3)
             self.stats["mapped"] += 1
 
-    def _map_keyframe_chunked(self, frame, T):
+    def _map_keyframe_chunked(self, frame, T, kw=None):
         """lock_chunk 模式：每 N 迭代释放一次锁，让 tracking 可插入。
 
         注意不能用 `with self._gpu_lock` 包裹（块退出时会二次 release）。
         释放后 sleep 1ms 给等待者（track）获锁机会，避免立即抢回。
+
+        2026-09-02 修正：**只有首个 chunk 执行播种/剪枝/容量淘汰**——map_keyframe
+        的 add_new 是全模型原生分辨率 silhouette 渲染（@200k 量级 100ms+），后续
+        chunk 重复执行纯属浪费（同一帧播种过一次后几乎无未覆盖像素，但渲染全价
+        照付）；prune/enforce_capacity 同理。后续 chunk 只做属性优化（iters 分段
+        切 Adam 仍是既有语义：每段独立 optimizer，此处只去重不改变迭代语义）。
+        kw 由 _loop 按队列积压选档（None 时为默认全量档）。
         """
-        base = {k: v for k, v in self.map_kwargs.items()}
+        if kw is None:
+            kw = self.map_kwargs
+        base = {k: v for k, v in kw.items()}
         iters = base.pop("iters", 50)
         from .mapping import map_keyframe as _mk
         self._gpu_lock.acquire()
         try:
             n = 0
+            first = True
+            first_stats = None
             while n < iters:
                 chunk = min(self.lock_chunk, iters - n)
-                _mk(frame, self.model, T, iters=chunk, window=list(self.keyframes), **base)
+                k2 = dict(base)
+                if not first:
+                    k2.update(add_new=False, prune=False, capacity_max=None)
+                stats = _mk(frame, self.model, T, iters=chunk,
+                            window=list(self.keyframes), **k2)
+                if first:
+                    first_stats = stats     # at_capacity 以首 chunk（含播种）为准
+                first = False
                 n += chunk
                 if n < iters:
                     self._gpu_lock.release()
@@ -188,6 +288,7 @@ class SLAMBackend:
                     # 可忽略——map 总持锁时间降下来后可调小（lock_sleep_ms）
                     time.sleep(self.lock_sleep_ms)
                     self._gpu_lock.acquire()
+            return first_stats
         finally:
             self._gpu_lock.release()
 
@@ -245,3 +346,20 @@ class SLAMBackend:
             stride = (n + max_points - 1) // max_points
             out = {k: v[::stride] for k, v in out.items()}
         return out
+
+    def save_checkpoint(self, path: str):
+        """全量 checkpoint：{'params', 'variables'} float32 CPU——与
+        node._load_checkpoint 同构（含 Phase 6 feature 通道时一并保存），
+        供语义场离线蒸馏/查询闭环复用（2026-09-02 衔接）。
+
+        锁内只做 .cpu() 拷贝，torch.save 序列化放锁外（路径写入不在 GPU 锁内）。
+        """
+        with self._gpu_lock:
+            params = {k: p.detach().float().cpu()
+                      for k, p in self.model.params.items()}
+            # variables 可能含非张量标量（如 scene_radius=5.0）——原样保留
+            variables = {k: v.detach().float().cpu() if isinstance(v, torch.Tensor) else v
+                         for k, v in self.model.variables.items()}
+            n = self.model.num_gaussians
+        torch.save({"params": params, "variables": variables,
+                    "num_gaussians": n}, path)
